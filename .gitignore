@@ -1,0 +1,30 @@
+# Environment files — NEVER commit real secrets
+.env
+backend/.env
+frontend/.env
+*.env.local
+
+# Python
+.venv/
+backend/.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Generated eval report (regenerate on demand — comment out this line if you want it tracked)
+# eval/report.md
