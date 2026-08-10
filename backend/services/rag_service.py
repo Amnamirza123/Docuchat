@@ -11,6 +11,12 @@ text on screen, which is the "no duplication" requirement.
 Model fallback: tries each model in settings.openrouter_models_list in
 order. If one is rate-limited or errors out, it moves to the next
 before giving up — so a single exhausted free model doesn't break chat.
+
+Safety-metadata guard: openrouter/free randomly picks an underlying free
+model per request. Occasionally the picked model returns raw
+safety-classifier output (e.g. "User Safety: safe Response Safety: safe")
+instead of a real answer. That's detected and treated as a failure worth
+retrying with the next model in the list, rather than shown to the user.
 """
 
 import json
@@ -65,6 +71,12 @@ def _filenames_for_documents(document_ids: list[str]) -> dict[str, str]:
     return {row["id"]: row["filename"] for row in result.data}
 
 
+def _looks_like_safety_metadata(text: str) -> bool:
+    """Detects the 'User Safety: safe Response Safety: safe' style glitch
+    some free models occasionally return instead of a real answer."""
+    return "Safety:" in text and len(text) < 100
+
+
 def stream_chat_response(chat_session_id: str, user_message: str):
     """
     Generator yielding (index, text_delta) tuples for SSE streaming.
@@ -106,28 +118,35 @@ def stream_chat_response(chat_session_id: str, user_message: str):
                 stream=True,
             )
 
-            got_any_content = False
+            attempt_text = ""
+            buffered_deltas = []
             for event in stream:
                 delta = event.choices[0].delta.content
                 if delta:
-                    got_any_content = True
+                    attempt_text += delta
+                    buffered_deltas.append(delta)
+
+            got_any_content = bool(attempt_text)
+            print(f"[DEBUG] {model_name} got_any_content={got_any_content}")
+
+            if got_any_content and not _looks_like_safety_metadata(attempt_text):
+                # Good response — now actually stream it out to the client.
+                for delta in buffered_deltas:
                     full_text += delta
                     yield index, delta
                     index += 1
-
-            print(f"[DEBUG] {model_name} got_any_content={got_any_content}")
-
-            if got_any_content:
                 last_error = None
                 break
+            elif got_any_content:
+                print(f"[DEBUG] {model_name} returned safety metadata instead of real content, retrying")
+                continue
 
         except Exception as e:
             print(f"[DEBUG] {model_name} failed with: {e}")
             last_error = e
-            full_text = ""
             continue
 
-    if last_error and not full_text:
+    if not full_text:
         error_message = "I'm having trouble reaching any available model right now. Please try again in a moment."
         yield 0, error_message
         full_text = error_message
